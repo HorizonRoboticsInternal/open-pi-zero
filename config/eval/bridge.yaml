@@ -19,8 +19,8 @@ n_video:  ${n_eval_episode}
 env:
   task:
   adapter:
-    _target_: src.agent.env_adapter.simpler.BridgeSimplerAdapter
-    dataset_statistics_path: config/bridge_statistics.json
+    _target_: hobot2.priors.openpi0.open_pi_zero.src.agent.env_adapter.simpler.BridgeSimplerAdapter
+    dataset_statistics_path: hobot2/priors/openpi0/open_pi_zero/config/bridge_statistics.json
     pretrained_model_path: ${oc.env:TRANSFORMERS_CACHE}/paligemma-3b-pt-224
     tokenizer_padding: max_length
     max_seq_len: 276  # fixed 256 for image + max 20 for text
@@ -34,7 +34,7 @@ use_torch_compile: True
 use_bf16: False
 
 cond_steps: 1
-horizon_steps: 4
+horizon_steps: 4  # now configured as action_chunk_size
 act_steps: 4
 action_dim: 7 # EEF_POS
 proprio_dim: 7  # POS_EULER

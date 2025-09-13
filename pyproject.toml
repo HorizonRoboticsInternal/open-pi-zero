@@ -6,30 +6,31 @@ authors = [
   {name = "Allen Z. Ren", email = "allenzren1@gmail.com"},
 ]
 readme = "README.md"
-requires-python = "==3.10.*"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
 ]
-dependencies = [
-    "bitsandbytes==0.45.0",
-    "einops",
-    "gsutil>=5.32",
-    "hydra-core",
-    "imageio",
-    "matplotlib",
-    "numpy==1.26.4",
-    "omegaconf",
-    "pillow",
-    "pre-commit>=4.0.1",
-    "pretty_errors",
-    "protobuf==3.20.3",
-    "tensorflow==2.15.0",
-    "tensorflow_datasets==4.9.2",
-    "torch==2.5.0",
-    "transformers==4.47.1",
-    "tqdm",
-    "wandb",
-]
+#dependencies = [
+#    "bitsandbytes==0.45.0",
+#    "einops",
+#    "gsutil>=5.32",
+#    "hydra-core",
+#    "imageio",
+#    "matplotlib",
+#    "numpy==1.26.4",
+#    "omegaconf",
+#    "pillow",
+#    "pre-commit>=4.0.1",
+#    "pretty_errors",
+#    "protobuf==3.20.3",
+#    "tensorflow==2.15.0",
+#    "tensorflow_datasets==4.9.2",
+#    "torch==2.5.0",
+#    "transformers==4.47.1",
+#    "tqdm",
+#    "wandb",
+#]
+dependencies = []
 
 [build-system]
 requires = ["setuptools>=61.0"]

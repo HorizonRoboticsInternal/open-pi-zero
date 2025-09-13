@@ -8,7 +8,7 @@ Potentially customized to add/remove mixtures, e.g., remove proprio or add anoth
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 
 import hydra
 import torch
@@ -25,9 +25,13 @@ from src.utils.monitor import log_execution_time
 log = logging.getLogger(__name__)
 
 
+
+
 class PiZero(nn.Module, NoSyncBase):
     @log_execution_time(log)
-    def __init__(self, cfg, use_ddp: bool = False):
+    def __init__(self,
+                 cfg,
+                 use_ddp: bool = False):
         super().__init__()
         self.cfg = cfg
         self.use_ddp = use_ddp  # used in NoSyncBase
@@ -50,7 +54,7 @@ class PiZero(nn.Module, NoSyncBase):
         self.action_hidden_size = cfg.mixture.action.hidden_size
 
         # Action parameterization
-        self.num_inference_steps = cfg.num_inference_steps
+        self.num_inference_steps = cfg.num_integration_steps
         self.horizon_steps = cfg.horizon_steps
         self.action_dim = cfg.action_dim
         self.proprio_dim = cfg.proprio_dim

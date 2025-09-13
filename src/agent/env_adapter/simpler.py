@@ -5,12 +5,16 @@ import cv2
 import numpy as np
 import tensorflow as tf
 import torch
-from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
+
+# from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
 from transformers import AutoTokenizer
 
 from src.agent.env_adapter.base import BaseEnvAdapter
 from src.model.vla.processing import VLAProcessor
 from src.utils.geometry import euler2axangle, mat2euler, quat2mat
+
+from hobot.robot_common.widowx250s_kinematics import WidowX250sKinematicsSolver
+from scipy.spatial.transform import Rotation as R
 
 
 class SimplerAdapter(BaseEnvAdapter):
@@ -50,53 +54,61 @@ class SimplerAdapter(BaseEnvAdapter):
     def reset(self):
         pass
 
+
     def preprocess(
-        self,
-        env,
-        obs: dict,
-        instruction: str,
+            self,
+            obs: dict,
+            instruction: str,
     ) -> dict:
-        """using sxyz convention for euler angles"""
-        image = get_image_from_maniskill2_obs_dict(env, obs)  # [H, W, 3]
-        image = cv2.resize(
-            image,
-            self.image_size,
-            interpolation=cv2.INTER_LANCZOS4,
+        """Vectorized batch preprocess. Same instruction for all obs."""
+        bs = obs["rgb"].shape[0]
+
+        # Note that we need to use cv2 instead of torch.nn.functional.interpolate
+        # This is because the Lanczos interpolation is not available in torch
+        # and using bicubic instead results in a significant performance drop.
+        old_imgs = obs["rgb"]
+        imgs = []
+        for o_img  in old_imgs:
+            imgs.append(cv2.resize(
+                    o_img,
+                    self.image_size,
+                    interpolation=cv2.INTER_LANCZOS4,
+                ))
+        imgs = torch.as_tensor(imgs, dtype=torch.uint8).permute(0, 3, 1, 2)
+
+        # processor will handle batching if we give repeated instructions
+        model_inputs = self.processor(
+            text=[instruction] * bs,
+            images=imgs,
         )
-        # no normalization for image before processor
-        # always on cpu
-        images = torch.as_tensor(image, dtype=torch.uint8).permute(2, 0, 1)[
-            None
-        ]  # [1, 3, H, W]
-        model_inputs = self.processor(text=[instruction], images=images)
 
-        # process proprio depending on the robot
-        raw_proprio = self.preprocess_proprio(obs)
+        # stack proprios
+        raw_proprios = self.preprocess_proprio(obs)
 
-        # normalize proprios - gripper opening is normalized
         if self.proprio_normalization_type == "bound":
             proprio = self.normalize_bound(
-                raw_proprio,
+                raw_proprios,
                 np.array(self.dataset_statistics["proprio"]["p01"]),
                 np.array(self.dataset_statistics["proprio"]["p99"]),
                 clip_min=-1,
                 clip_max=1,
             )
-        elif self.proprio_normalization_type == "gaussian":
+        else:  # gaussian
             proprio = self.normalize_gaussian(
-                raw_proprio,
+                raw_proprios,
                 np.array(self.dataset_statistics["proprio"]["mean"]),
                 np.array(self.dataset_statistics["proprio"]["std"]),
             )
+
+        proprios = torch.as_tensor(proprio, dtype=torch.float32)[:, None, :]  # [B, T=1, dim]
 
         return {
             "input_ids": model_inputs["input_ids"],
             "pixel_values": model_inputs["pixel_values"],
             "attention_mask": model_inputs["attention_mask"],
-            "proprios": torch.as_tensor(proprio, dtype=torch.float32)[
-                None, None
-            ],  # [B, T, dim]
+            "proprios": proprios,
         }
+
 
     def postprocess(
         self,
@@ -105,7 +117,7 @@ class SimplerAdapter(BaseEnvAdapter):
         # gripper action is not normalized in training dataset
         if self.action_normalization_type == "bound":
             raw_actions_except_gripper = self.denormalize_bound(
-                actions[:, :-1],
+                actions[..., :-1],
                 np.array(self.dataset_statistics["action"]["p01"])[:-1],
                 np.array(self.dataset_statistics["action"]["p99"])[:-1],
                 clip_min=-1,
@@ -113,32 +125,17 @@ class SimplerAdapter(BaseEnvAdapter):
             )
         elif self.action_normalization_type == "gaussian":
             raw_actions_except_gripper = self.denormalize_gaussian(
-                actions[:, :-1],
+                actions[..., :-1],
                 np.array(self.dataset_statistics["action"]["mean"])[:-1],
                 np.array(self.dataset_statistics["action"]["std"])[:-1],
             )
-        raw_actions = np.concatenate(
+        actions = np.concatenate(
             [
                 raw_actions_except_gripper,
-                actions[:, -1:],
+                self.postprocess_gripper(actions[..., -1:]),
             ],
-            axis=1,
+            axis=2,
         )
-
-        # prepare for simpler env
-        actions = np.zeros((len(raw_actions), 7))  # chunk
-        for idx, raw_action in enumerate(raw_actions):
-            roll, pitch, yaw = raw_action[3:6]
-            action_rotation_ax, action_rotation_angle = euler2axangle(roll, pitch, yaw)
-            action_gripper = self.postprocess_gripper(raw_action[-1])
-
-            actions[idx] = np.concatenate(
-                [
-                    raw_action[:3],
-                    action_rotation_ax * action_rotation_angle,
-                    [action_gripper],
-                ]
-            )
         return actions
 
     def preprocess_proprio(self, obs: dict) -> np.array:
@@ -161,25 +158,31 @@ class BridgeSimplerAdapter(SimplerAdapter):
             [[0, 0, 1.0], [0, 1.0, 0], [-1.0, 0, 0]]
         )  # https://github.com/rail-berkeley/bridge_data_robot/blob/b841131ecd512bafb303075bd8f8b677e0bf9f1f/widowx_envs/widowx_controller/src/widowx_controller/widowx_controller.py#L203
 
+        self._kin_solver = WidowX250sKinematicsSolver()
+
     def reset(self):
         super().reset()
 
     def preprocess_proprio(self, obs: dict) -> np.array:
-        # convert ee rotation to the frame of top-down
-        proprio = obs["agent"]["eef_pos"]
-        rm_bridge = quat2mat(proprio[3:7])
-        rpy_bridge_converted = mat2euler(rm_bridge @ self.default_rot.T)
-        gripper_openness = proprio[7]
-        raw_proprio = np.concatenate(
-            [
-                proprio[:3],
-                rpy_bridge_converted,
-                [gripper_openness],
-            ]
-        )
+        # return raw_proprio
+        jp = obs["joint_pos"]
+        ee_tf = self._kin_solver.batched_fwd_kin(jp[:, :6])
+        rm_bridge = ee_tf[:, :3, :3]
+        rpy_bridge_converted = R.from_matrix(
+            rm_bridge @ self.default_rot.T).as_euler("xyz")
+
+        # TODO: need to properly respect gripper_closing_pos in
+        # ManiSkill widow robot. Right now, we assume it is zero.
+        gripper_opening = jp[:, -1:] / 0.04
+
+        raw_proprio = np.concatenate([
+            ee_tf[:, :3, 3],
+            rpy_bridge_converted,
+            gripper_opening,
+        ], axis=1)
         return raw_proprio
 
-    def postprocess_gripper(self, action: float) -> float:
+    def postprocess_gripper(self, action: np.ndarray) -> np.ndarray:
         """from simpler octo inference: https://github.com/allenzren/SimplerEnv/blob/7d39d8a44e6d5ec02d4cdc9101bb17f5913bcd2a/simpler_env/policies/octo/octo_model.py#L234-L235"""
         # trained with [0, 1], 0 for close, 1 for open
         # convert to -1 close, 1 open for simpler

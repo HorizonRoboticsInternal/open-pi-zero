@@ -11,7 +11,7 @@ device: cuda
 n_nodes: 1
 seed: 42
 pretrained_model_path: ${oc.env:TRANSFORMERS_CACHE}/paligemma-3b-pt-224
-load_pretrained_weights: True
+load_pretrained_weights: False
 resume_checkpoint_path:
 train_vlm: True
 action_expert_adaptive_mode:  # adaLN, adaLN-Zero, or None
