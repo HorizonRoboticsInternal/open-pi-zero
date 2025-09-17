@@ -183,12 +183,8 @@ class BridgeSimplerAdapter(SimplerAdapter):
         return raw_proprio
 
     def postprocess_gripper(self, action: np.ndarray) -> np.ndarray:
-        """from simpler octo inference: https://github.com/allenzren/SimplerEnv/blob/7d39d8a44e6d5ec02d4cdc9101bb17f5913bcd2a/simpler_env/policies/octo/octo_model.py#L234-L235"""
-        # trained with [0, 1], 0 for close, 1 for open
-        # convert to -1 close, 1 open for simpler
-        action_gripper = 2.0 * (action > 0.5) - 1.0
+        action_gripper = action > 0.5
         return action_gripper
-
 
 class EDRSimplerAdapter(SimplerAdapter):
     def __init__(self, **kwargs):
