@@ -19,8 +19,8 @@ n_video:  ${n_eval_episode}
 env:
   task:
   adapter:
-    _target_: hobot2.priors.openpi0.open_pi_zero.openpi0.agent.env_adapter.simpler.BridgeSimplerAdapter
-    dataset_statistics_path: hobot2/priors/openpi0/open_pi_zero/config/bridge_statistics.json
+    _target_: submodules.open_pi_zero.openpi0.agent.env_adapter.simpler.BridgeSimplerAdapter
+    dataset_statistics_path: submodules/open_pi_zero/config/bridge_statistics.json
     pretrained_model_path: ${oc.env:TRANSFORMERS_CACHE}/paligemma-3b-pt-224
     tokenizer_padding: max_length
     max_seq_len: 276  # fixed 256 for image + max 20 for text
