@@ -3,7 +3,7 @@ defaults:
 hydra:
   run:
     dir: ${log_dir}
-_target_: src.agent.train.TrainAgent
+_target_: openpi0.agent.train.TrainAgent
 
 log_dir: ${oc.env:VLA_LOG_DIR}/train/${name}/${now:%Y-%m-%d}_${now:%H-%M}_${seed}
 name: ${data.train.dataset_mix}_${data.train.split}_tp${horizon_steps}_${flow_sampling}
@@ -131,7 +131,7 @@ vocab_size: 257216
 pad_token_id: 0
 
 vision:
-  _target_: src.model.paligemma.siglip.SiglipVisionModel
+  _target_: openpi0.model.paligemma.siglip.SiglipVisionModel
   config:
     hidden_size: 1152 # siglip
     intermediate_size: 4304
@@ -150,7 +150,7 @@ vision:
   use_lora: ${lora}
 
 vision_projector:
-  _target_: src.model.paligemma.siglip.PaliGemmaMultiModalProjector
+  _target_: openpi0.model.paligemma.siglip.PaliGemmaMultiModalProjector
   config:
     vision_config:
       hidden_size: 1152
@@ -162,7 +162,7 @@ vision_projector:
   use_lora: ${lora}
 
 joint:
-  _target_: src.model.vla.joint_model.JointModel
+  _target_: openpi0.model.vla.joint_model.JointModel
   config:
     action_expert_adaptive_mode: ${action_expert_adaptive_mode}
     time_hidden_size: ${time_hidden_size}

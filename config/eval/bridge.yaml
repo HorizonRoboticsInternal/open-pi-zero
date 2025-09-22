@@ -3,7 +3,7 @@ defaults:
 hydra:
   run:
     dir: ${log_dir}
-_target_: src.agent.eval.EvalAgent
+_target_: openpi0.agent.eval.EvalAgent
 
 log_dir: ${oc.env:VLA_LOG_DIR}/eval_bridge/${name}_ta${act_steps}_${seed}/${env.task}_${now:%H-%M-%S}
 name:
@@ -19,7 +19,7 @@ n_video:  ${n_eval_episode}
 env:
   task:
   adapter:
-    _target_: hobot2.priors.openpi0.open_pi_zero.src.agent.env_adapter.simpler.BridgeSimplerAdapter
+    _target_: hobot2.priors.openpi0.open_pi_zero.openpi0.agent.env_adapter.simpler.BridgeSimplerAdapter
     dataset_statistics_path: hobot2/priors/openpi0/open_pi_zero/config/bridge_statistics.json
     pretrained_model_path: ${oc.env:TRANSFORMERS_CACHE}/paligemma-3b-pt-224
     tokenizer_padding: max_length
@@ -83,7 +83,7 @@ vocab_size: 257216
 pad_token_id: 0
 
 vision:
-  _target_: src.model.paligemma.siglip.SiglipVisionModel
+  _target_: openpi0.model.paligemma.siglip.SiglipVisionModel
   config:
     hidden_size: 1152 # siglip
     intermediate_size: 4304
@@ -97,14 +97,14 @@ vision:
     num_image_tokens: 256
 
 vision_projector:
-  _target_: src.model.paligemma.siglip.PaliGemmaMultiModalProjector
+  _target_: openpi0.model.paligemma.siglip.PaliGemmaMultiModalProjector
   config:
     vision_config:
       hidden_size: 1152
       projection_dim: 2048
 
 joint:
-  _target_: src.model.vla.joint_model.JointModel
+  _target_: openpi0.model.vla.joint_model.JointModel
   config:
     action_expert_adaptive_mode: ${action_expert_adaptive_mode}
     time_hidden_size: ${time_hidden_size}

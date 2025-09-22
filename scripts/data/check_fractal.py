@@ -6,10 +6,10 @@ import tqdm
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from src.data.dataset import make_interleaved_dataset
-from src.data.dataset_torch import TorchRLDSDataset
-from src.data.oxe import make_oxe_dataset_kwargs_and_weights
-from src.utils.geometry import quat2euler
+from openpi0.data.dataset import make_interleaved_dataset
+from openpi0.data.dataset_torch import TorchRLDSDataset
+from openpi0.data.oxe import make_oxe_dataset_kwargs_and_weights
+from openpi0.utils.geometry import quat2euler
 
 tf.config.set_visible_devices([], "GPU")
 

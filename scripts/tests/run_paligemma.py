@@ -4,10 +4,10 @@ import time
 import torch
 from PIL import Image
 
-from src.model.kv_cache import KVCache
-from src.model.paligemma.load import load_hf_model
-from src.model.paligemma.processing import PaliGemmaProcessor
-from src.utils.monitor import log_allocated_gpu_memory
+from openpi0.model.kv_cache import KVCache
+from openpi0.model.paligemma.load import load_hf_model
+from openpi0.model.paligemma.processing import PaliGemmaProcessor
+from openpi0.utils.monitor import log_allocated_gpu_memory
 
 
 def move_inputs_to_device(model_inputs: dict, device: str):

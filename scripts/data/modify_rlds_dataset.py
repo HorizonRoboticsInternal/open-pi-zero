@@ -5,8 +5,8 @@ from functools import partial
 
 import tensorflow_datasets as tfds
 
-from src.data.oxe.preprocess.mod_functions import TFDS_MOD_FUNCTIONS
-from src.data.oxe.preprocess.multithreaded_adhoc_tfds_builder import (
+from openpi0.data.oxe.preprocess.mod_functions import TFDS_MOD_FUNCTIONS
+from openpi0.data.oxe.preprocess.multithreaded_adhoc_tfds_builder import (
     MultiThreadedAdhocDatasetBuilder,
 )
 
