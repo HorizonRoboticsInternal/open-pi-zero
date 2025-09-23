@@ -97,7 +97,7 @@ mixture:
   vlm:   # gemma
     hidden_size: 2048
     intermediate_size: 16384
-    use_final_norm: False
+    use_final_norm: True
     cache: True
     use_quantize: ${quantize}
     use_lora: ${lora}
