@@ -8,7 +8,7 @@ Potentially customized to add/remove mixtures, e.g., remove proprio or add anoth
 """
 
 import logging
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Dict
 
 import hydra
 import torch
@@ -417,20 +417,49 @@ class PiZero(nn.Module, NoSyncBase):
             ]
         return final_embedding
 
-    def infer_action(
-        self,
-        input_ids: torch.LongTensor,
-        pixel_values: torch.FloatTensor,
-        image_text_proprio_mask: torch.FloatTensor,
-        action_mask: torch.FloatTensor,
-        vlm_position_ids: torch.LongTensor,
-        proprio_position_ids: torch.LongTensor,
-        action_position_ids: torch.LongTensor,
-        proprios: torch.FloatTensor,
-    ) -> torch.FloatTensor:
-        dtype, device = pixel_values.dtype, pixel_values.device
-        bsz = pixel_values.size(0)
+    def get_vlm_proprio_hidden_state(self,
+                         input_ids: torch.LongTensor,
+                         pixel_values: torch.FloatTensor,
+                         image_text_proprio_mask: torch.FloatTensor,
+                         vlm_position_ids: torch.LongTensor,
+                         proprio_position_ids: torch.LongTensor,
+                         proprios: torch.FloatTensor,
+                         return_caches: bool = False,
+                         ) -> Dict[str, KVCache]:
+        kv_caches = self.joint_model.build_mixture_caches()
 
+        # merge the text tokens and the image tokens
+        inputs_embeds = self._forward_siglip_and_text_embedding(input_ids, pixel_values)
+
+        # proprio
+        proprio_embeds = self.proprio_encoder(proprios)
+
+        # forward pass thru the vlm and proprio, cache the kv
+        res = self.joint_model(
+            attention_mask=image_text_proprio_mask,
+            position_ids_all={
+                "vlm": vlm_position_ids,
+                "proprio": proprio_position_ids,
+            },
+            embeds_all={
+                "vlm": inputs_embeds,
+                "proprio": proprio_embeds,
+            },
+            kv_caches=kv_caches,
+            final_layer_post_attn_skip_names=(),
+            return_caches=return_caches,
+        )
+        # Will be hidden_state or (hidden_state, kv_caches) if return_caches is True
+        return res
+
+    def get_vlm_proprio_kv_caches(self,
+                      input_ids: torch.LongTensor,
+                      pixel_values: torch.FloatTensor,
+                      image_text_proprio_mask: torch.FloatTensor,
+                      vlm_position_ids: torch.LongTensor,
+                      proprio_position_ids: torch.LongTensor,
+                      proprios: torch.FloatTensor,
+                      ) -> Dict[str, KVCache]:
         kv_caches = self.joint_model.build_mixture_caches()
 
         # merge the text tokens and the image tokens
@@ -453,15 +482,22 @@ class PiZero(nn.Module, NoSyncBase):
             kv_caches=kv_caches,
             return_caches=True,
         )
+        return kv_caches
 
-        # sample pure action noise
-        action = torch.randn(
-            (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
-        )
+    def flow_forward_euler_integration(self,
+                                       action_mask: torch.FloatTensor,
+                                       action_position_ids: torch.LongTensor,
+                                       vlm_proprio_kv_caches: Dict[str, KVCache],
+                                       action: torch.FloatTensor,
+                                       ):
+        assert action.shape[1] == self.horizon_steps
 
         # forward euler integration --- using kv caches of vlm and proprio
-        delta_t = 1.0 / self.num_inference_steps
+        bsz = action.size(0)
+        device = action.device
+        dtype = action.dtype
         t = torch.zeros(bsz, device=device, dtype=dtype)
+        delta_t = 1.0 / self.num_inference_steps
         for _ in range(self.num_inference_steps):
             # encode action and time into embedding
             time_cond = self.time_embedding(t)
@@ -476,7 +512,7 @@ class PiZero(nn.Module, NoSyncBase):
                 position_ids_all={"action": action_position_ids},
                 embeds_all={"action": action_embeds},
                 time_cond=time_cond,
-                kv_caches=kv_caches,
+                kv_caches=vlm_proprio_kv_caches,
                 cache_mode="append_non_active",  # use caches from other mixtures, i.e., vlm and proprio
             )["action"]
             # decode action: [Batch_Size, Horizon_Steps, Action_Dim]
@@ -493,72 +529,34 @@ class PiZero(nn.Module, NoSyncBase):
             )
         return action
 
-    def infer_action_naive(
-        self,
-        input_ids: torch.LongTensor,
-        pixel_values: torch.FloatTensor,
-        causal_mask: torch.FloatTensor,
-        vlm_position_ids: torch.LongTensor,
-        proprio_position_ids: torch.LongTensor,
-        action_position_ids: torch.LongTensor,
-        proprios: torch.FloatTensor,
+    def infer_action(
+            self,
+            input_ids: torch.LongTensor,
+            pixel_values: torch.FloatTensor,
+            image_text_proprio_mask: torch.FloatTensor,
+            action_mask: torch.FloatTensor,
+            vlm_position_ids: torch.LongTensor,
+            proprio_position_ids: torch.LongTensor,
+            action_position_ids: torch.LongTensor,
+            proprios: torch.FloatTensor,
+            action0: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
-        dtype, device = pixel_values.dtype, pixel_values.device
-        bsz = pixel_values.size(0)
 
-        kv_caches = self.joint_model.build_mixture_caches()
+        vlm_proprio_kv_caches = self.get_vlm_proprio_kv_caches(input_ids, pixel_values, image_text_proprio_mask,
+                                      vlm_position_ids, proprio_position_ids, proprios)
 
-        # merge the text tokens and the image tokens
-        inputs_embeds = self._forward_siglip_and_text_embedding(input_ids, pixel_values)
-
-        # encode proprio
-        proprio_embeds = self.proprio_encoder(proprios)
-
-        # sample pure action noise
-        action = torch.randn(
-            (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
-        )
-
-        # forward euler integration --- run vlm in each step, which is unnecessary
-        delta_t = 1.0 / self.num_inference_steps
-        t = torch.zeros(bsz, device=device, dtype=dtype)
-        for _ in range(self.num_inference_steps):
-            # encode action and time into embedding
-            time_cond = self.time_embedding(t)
-            # [Batch_Size, Horizon_Steps, Embed_Dim]
-            if self.action_expert_adaptive_mode:
-                action_embeds = self.action_encoder(action)
-            else:
-                action_embeds = self.action_encoder(action, time_cond)
-            action_embeds = self.joint_model(
-                attention_mask=causal_mask,
-                position_ids_all={
-                    "vlm": vlm_position_ids,
-                    "proprio": proprio_position_ids,
-                    "action": action_position_ids,
-                },
-                embeds_all={
-                    "vlm": inputs_embeds.clone(),  # clone needed due to modified in-place
-                    "proprio": proprio_embeds.clone(),
-                    "action": action_embeds,
-                },
-                time_cond=time_cond,
-                kv_caches=kv_caches,
-                cache_mode="no_append",  # no new tokens
-            )["action"]
-            # decode action: [Batch_Size, Horizon_Steps, Action_Dim]
-            action_vel = self.action_decoder(action_embeds)
-            action += delta_t * action_vel
-            t += delta_t
-
-        # clamp final output if specified
-        if self.final_action_clip_value is not None:
-            action = torch.clamp(
-                action,
-                -self.final_action_clip_value,
-                self.final_action_clip_value,
+        if action0 is None:
+            # If action0 is not provided, sample pure action noise
+            bsz = pixel_values.size(0)
+            dtype, device = pixel_values.dtype, pixel_values.device
+            action0 = torch.randn(
+                (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
             )
-        return action
+
+        action1 = self.flow_forward_euler_integration(action_mask, action_position_ids,
+                                                     vlm_proprio_kv_caches, action0.clone())
+
+        return action1
 
     def infer_text(
         self,
