@@ -539,25 +539,19 @@ class PiZero(nn.Module, NoSyncBase):
             proprio_position_ids: torch.LongTensor,
             action_position_ids: torch.LongTensor,
             proprios: torch.FloatTensor,
+            action0: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
 
-        # vlm_proprio_kv_caches = self.get_vlm_proprio_kv_caches(input_ids, pixel_values, image_text_proprio_mask,
-        #                               vlm_position_ids, proprio_position_ids, proprios)
+        vlm_proprio_kv_caches = self.get_vlm_proprio_kv_caches(input_ids, pixel_values, image_text_proprio_mask,
+                                      vlm_position_ids, proprio_position_ids, proprios)
 
-        hidden_state, vlm_proprio_kv_caches = self.get_vlm_proprio_hidden_state(input_ids, pixel_values, image_text_proprio_mask,
-                                                               vlm_position_ids, proprio_position_ids, proprios,
-                                                                                return_caches=True)
-
-        print(hidden_state["vlm"].shape)
-        print(hidden_state["proprio"].shape)
-        print("-------")
-
-        # sample pure action noise
-        bsz = pixel_values.size(0)
-        dtype, device = pixel_values.dtype, pixel_values.device
-        action0 = torch.randn(
-            (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
-        )
+        if action0 is None:
+            # If action0 is not provided, sample pure action noise
+            bsz = pixel_values.size(0)
+            dtype, device = pixel_values.dtype, pixel_values.device
+            action0 = torch.randn(
+                (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
+            )
 
         action1 = self.flow_forward_euler_integration(action_mask, action_position_ids,
                                                      vlm_proprio_kv_caches, action0.clone())
