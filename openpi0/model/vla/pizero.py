@@ -558,6 +558,27 @@ class PiZero(nn.Module, NoSyncBase):
 
         return action1
 
+    def infer_action_with_kv(
+            self,
+            action_mask: torch.FloatTensor,
+            action_position_ids: torch.LongTensor,
+            vlm_proprio_kv_caches: Dict[str, KVCache],
+            action0: Optional[torch.FloatTensor] = None,
+    ) -> torch.FloatTensor:
+
+        if action0 is None:
+            # If action0 is not provided, sample pure action noise
+            bsz = pixel_values.size(0)
+            dtype, device = pixel_values.dtype, pixel_values.device
+            action0 = torch.randn(
+                (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
+            )
+
+        action1 = self.flow_forward_euler_integration(action_mask, action_position_ids,
+                                                      vlm_proprio_kv_caches, action0.clone())
+
+        return action1
+
     def infer_text(
         self,
         input_ids: torch.LongTensor,
