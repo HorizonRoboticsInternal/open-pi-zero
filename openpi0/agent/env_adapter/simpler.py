@@ -58,10 +58,8 @@ class SimplerAdapter(BaseEnvAdapter):
     def preprocess(
             self,
             obs: dict,
-            instruction: str,
     ) -> dict:
         """Vectorized batch preprocess. Same instruction for all obs."""
-        bs = obs["rgb"].shape[0]
 
         # Note that we need to use cv2 instead of torch.nn.functional.interpolate
         # This is because the Lanczos interpolation is not available in torch
@@ -78,7 +76,7 @@ class SimplerAdapter(BaseEnvAdapter):
 
         # processor will handle batching if we give repeated instructions
         model_inputs = self.processor(
-            text=[instruction] * bs,
+            text=obs["instrs"],
             images=imgs,
         )
 

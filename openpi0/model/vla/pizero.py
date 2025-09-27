@@ -8,7 +8,7 @@ Potentially customized to add/remove mixtures, e.g., remove proprio or add anoth
 """
 
 import logging
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Union
 
 import hydra
 import torch
@@ -425,7 +425,8 @@ class PiZero(nn.Module, NoSyncBase):
                          proprio_position_ids: torch.LongTensor,
                          proprios: torch.FloatTensor,
                          return_caches: bool = False,
-                         ) -> Dict[str, KVCache]:
+                         ) -> Union[Dict[str, torch.Tensor],
+                                    Tuple[Dict[str, torch.Tensor], Dict[str, KVCache]]]:
         kv_caches = self.joint_model.build_mixture_caches()
 
         # merge the text tokens and the image tokens
@@ -529,6 +530,7 @@ class PiZero(nn.Module, NoSyncBase):
             )
         return action
 
+    @torch.inference_mode
     def infer_action(
             self,
             input_ids: torch.LongTensor,
@@ -541,7 +543,6 @@ class PiZero(nn.Module, NoSyncBase):
             proprios: torch.FloatTensor,
             action0: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
-
         vlm_proprio_kv_caches = self.get_vlm_proprio_kv_caches(input_ids, pixel_values, image_text_proprio_mask,
                                       vlm_position_ids, proprio_position_ids, proprios)
 
@@ -554,10 +555,11 @@ class PiZero(nn.Module, NoSyncBase):
             )
 
         action1 = self.flow_forward_euler_integration(action_mask, action_position_ids,
-                                                     vlm_proprio_kv_caches, action0.clone())
+                                                      vlm_proprio_kv_caches, action0.clone())
 
         return action1
 
+    @torch.inference_mode
     def infer_action_with_kv(
             self,
             action_mask: torch.FloatTensor,
@@ -565,18 +567,16 @@ class PiZero(nn.Module, NoSyncBase):
             vlm_proprio_kv_caches: Dict[str, KVCache],
             action0: Optional[torch.FloatTensor] = None,
     ) -> torch.FloatTensor:
-
         if action0 is None:
             # If action0 is not provided, sample pure action noise
-            bsz = pixel_values.size(0)
-            dtype, device = pixel_values.dtype, pixel_values.device
+            bsz = action_mask.size(0)
+            dtype, device = action_mask.dtype, action_mask.device
             action0 = torch.randn(
                 (bsz, self.horizon_steps, self.action_dim), device=device, dtype=dtype
             )
 
         action1 = self.flow_forward_euler_integration(action_mask, action_position_ids,
                                                       vlm_proprio_kv_caches, action0.clone())
-
         return action1
 
     def infer_text(
