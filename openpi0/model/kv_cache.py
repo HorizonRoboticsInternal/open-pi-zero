@@ -4,10 +4,16 @@ import torch
 
 
 class KVCache:
-    def __init__(self) -> None:
+    def __init__(self, key_cache: List[torch.Tensor] = None, value_cache: List[torch.Tensor] = None) -> None:
         """list for layers"""
-        self.key_cache: List[torch.Tensor] = []
-        self.value_cache: List[torch.Tensor] = []
+        if key_cache is None:
+            self.key_cache: List[torch.Tensor] = []
+        else:
+            self.key_cache = key_cache
+        if value_cache is None:
+            self.value_cache: List[torch.Tensor] = []
+        else:
+            self.value_cache = value_cache
 
     def has_item(self, layer_idx) -> bool:
         return len(self.key_cache) > layer_idx
