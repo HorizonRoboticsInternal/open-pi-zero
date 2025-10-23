@@ -43,7 +43,7 @@ uv run src/model/vla/pizero.py --text_only --load_pretrained_weights --use_bf16
 
 <!-- VLA with dummy img/text, proprio, and action, output dummy flow matching action
 ```console
-uv run openpi0/model/vla/pizero.py
+uv run ren_openpi0/model/vla/pizero.py
 ``` -->
 
 ## Try checkpoints

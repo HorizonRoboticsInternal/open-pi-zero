@@ -1,5 +1,5 @@
 [project]
-name = "open-pi-zero"
+name = "ren-open-pi-zero"
 version = "0.1.1"
 description = "Re-implementation of Pi0 vision-language-action (VLA) model from Physical Intelligence"
 authors = [

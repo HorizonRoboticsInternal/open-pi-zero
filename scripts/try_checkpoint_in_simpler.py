@@ -9,8 +9,8 @@ import simpler_env
 import torch
 from omegaconf import OmegaConf
 
-from openpi0.model.vla.pizero import PiZeroInference
-from openpi0.utils.monitor import log_allocated_gpu_memory, log_execution_time
+from ren_openpi0.model.vla.pizero import PiZeroInference
+from ren_openpi0.utils.monitor import log_allocated_gpu_memory, log_execution_time
 
 
 @log_execution_time()
