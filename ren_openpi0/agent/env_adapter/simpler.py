@@ -3,7 +3,6 @@ from typing import List, Tuple
 
 import cv2
 import numpy as np
-import tensorflow as tf
 import torch
 
 # from simpler_env.utils.env.observation_utils import get_image_from_maniskill2_obs_dict
@@ -37,6 +36,7 @@ class SimplerAdapter(BaseEnvAdapter):
         assert proprio_normalization_type in ["bound", "gaussian"]
 
         # for normalization
+        import tensorflow as tf
         with tf.io.gfile.GFile(dataset_statistics_path, "r") as f:
             self.dataset_statistics = json.load(f)
 
