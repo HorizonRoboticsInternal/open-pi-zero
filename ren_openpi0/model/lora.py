@@ -351,6 +351,7 @@ class LoRALinear4bit(Linear4bit, LoRALayer):
 
         if self.r > 0:
             # dropout don't affect the model when in eval() mode
+            result = result.clone()
             result += (
                 self.dropout(x)
                 @ self.lora_A.transpose(0, 1)
