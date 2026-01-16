@@ -16,9 +16,12 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
+from functools import partial
 
 from ren_openpi0.model.kv_cache import KVCache
 from ren_openpi0.model.vla.mixture import Mixture
+from ren_openpi0.model.utils import checkpoint_wrapper
+
 
 
 def forward_mixture_layers(
@@ -31,24 +34,31 @@ def forward_mixture_layers(
     kv_caches: dict[KVCache] = {},
     cache_mode: str = "append_non_active",
     time_cond: Optional[torch.FloatTensor] = None,
+    use_grad_checkpointing: bool = False,
 ) -> dict[torch.FloatTensor]:
     """the usual norm + attn + res + norm + mlp + res"""
     active_mixture_names = list(embeds_all.keys())
+
+    _checkpoint_wrapper = partial(checkpoint_wrapper, use_grad_checkpointing=use_grad_checkpointing)
 
     # [Batch_Size, Seq_Len, Hidden_Size]
     residuals_pre_attn = embeds_all
     hidden_states_input_norm = {}
     for name in active_mixture_names:
-        hidden_states_input_norm[name] = mixtures[name].layer_func(
+        hidden_states_input_norm[name] = (
+            _checkpoint_wrapper(
+            mixtures[name].layer_func,
             "forward_norm",
             layer_idx,
             "input_layernorm",
             embeds_all[name],
             time_cond,
-        )  # a bit convoluted
+        ))  # a bit convoluted
     hidden_states_pre_attn = hidden_states_input_norm
 
     # [Batch_Size, Seq_Len, Hidden_Size]
+    # Can't checkpoint forward_mixture_attn because it mutates the kv_cache
+    # Instead, we'll checkpoint the individual attn calls within it.
     hidden_states_post_attn = forward_mixture_attn(
         mixtures,
         hidden_states_all=hidden_states_pre_attn,
@@ -58,6 +68,7 @@ def forward_mixture_layers(
         post_attn_skip_names=post_attn_skip_names,
         kv_caches=kv_caches,
         cache_mode=cache_mode,
+        use_grad_checkpointing=use_grad_checkpointing,
     )
     hidden_states_pre_res = hidden_states_post_attn
 
@@ -67,7 +78,8 @@ def forward_mixture_layers(
         if name in post_attn_skip_names:
             hidden_states_post_res[name] = None
         else:
-            hidden_states_pre_res[name] = mixtures[name].layer_func(
+            hidden_states_pre_res[name] = _checkpoint_wrapper(
+                mixtures[name].layer_func,
                 "forward_adaptive_scale",
                 layer_idx,
                 "post_attn",
@@ -86,7 +98,8 @@ def forward_mixture_layers(
         if name in post_attn_skip_names:
             hidden_states_post_post_attn[name] = None
         else:
-            hidden_states_post_post_attn[name] = mixtures[name].layer_func(
+            hidden_states_post_post_attn[name] = _checkpoint_wrapper(
+                mixtures[name].layer_func,
                 "forward_norm",
                 layer_idx,
                 "post_attention_layernorm",
@@ -101,7 +114,8 @@ def forward_mixture_layers(
         if name in post_attn_skip_names:
             hidden_states_pos_mlp[name] = None
         else:
-            hidden_states_pos_mlp[name] = mixtures[name].layer_func(
+            hidden_states_pos_mlp[name] = _checkpoint_wrapper(
+                mixtures[name].layer_func,
                 "mlp",
                 layer_idx,
                 hidden_states_pre_mlp[name],
@@ -114,7 +128,8 @@ def forward_mixture_layers(
         if name in post_attn_skip_names:
             hidden_states_final[name] = None
         else:
-            hidden_states_pre_final_res[name] = mixtures[name].layer_func(
+            hidden_states_pre_final_res[name] = _checkpoint_wrapper(
+                mixtures[name].layer_func,
                 "forward_adaptive_scale",
                 layer_idx,
                 "final",
@@ -125,7 +140,6 @@ def forward_mixture_layers(
                 residuals_pre_post_attn[name] + hidden_states_pre_final_res[name]
             )
     return hidden_states_final
-
 
 def forward_mixture_attn(
     mixtures: nn.ModuleDict,
@@ -138,6 +152,7 @@ def forward_mixture_attn(
     cache_mode: str = "append_non_active",
     attn_softclamp: float = 50.0,  # default in gemma
     attention_dropout: float = 0.0,
+    use_grad_checkpointing: bool = False,
 ) -> dict[torch.FloatTensor]:
     """Assume all mixtures have the same head dim"""
     assert cache_mode in [
@@ -149,12 +164,16 @@ def forward_mixture_attn(
     q_lens = [hidden_states.size(1) for hidden_states in hidden_states_all.values()]
     active_mixture_names = list(hidden_states_all.keys())
 
+    _checkpoint_wrapper = partial(checkpoint_wrapper, use_grad_checkpointing=use_grad_checkpointing)
+
     # always re-compute queries
     query_states_all = {}
     for name in active_mixture_names:
-        # [Batch_Size, Num_Heads_Q, Seq_Len, Head_Dim]
-        query_states = mixtures[name].attn_func(
-            "forward_q_proj", layer_idx, hidden_states_all[name]
+        query_states = _checkpoint_wrapper(
+            mixtures[name].attn_func,
+            "forward_q_proj",
+            layer_idx,
+            hidden_states_all[name],
         )
         query_states_all[name] = query_states
 
@@ -170,8 +189,12 @@ def forward_mixture_attn(
     for name in active_mixture_names:
         # prepare rope
         query_states = query_states_all[name]
-        rope_cos, rope_sin = mixtures[name].attn_func(
-            "forward_rotary_emb", layer_idx, query_states, position_ids_all[name]
+        rope_cos, rope_sin = _checkpoint_wrapper(
+            mixtures[name].attn_func,
+            "forward_rotary_emb",
+            layer_idx,
+            query_states,
+            position_ids_all[name]
         )
 
         # always use kv cache if it has the current layer
@@ -195,15 +218,22 @@ def forward_mixture_attn(
         if flag_calc_new_kv:
             hidden_states = hidden_states_all[name]
             # [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
-            key_states_new = mixtures[name].attn_func(
-                "forward_k_proj", layer_idx, hidden_states
+            key_states_new = _checkpoint_wrapper(
+                mixtures[name].attn_func,
+                "forward_k_proj",
+                layer_idx,
+                hidden_states
             )
-            value_states_new = mixtures[name].attn_func(
-                "forward_v_proj", layer_idx, hidden_states
+            value_states_new = _checkpoint_wrapper(
+                mixtures[name].attn_func,
+                "forward_v_proj",
+                layer_idx,
+                hidden_states
             )
 
             # [Batch_Size, Num_Heads_KV, Seq_Len, Head_Dim]
-            key_states_new = mixtures[name].attn_func(
+            key_states_new = _checkpoint_wrapper(
+                mixtures[name].attn_func,
                 "forward_apply_rotary_emb",
                 layer_idx,
                 key_states_new,
@@ -220,7 +250,8 @@ def forward_mixture_attn(
 
         # always apply rope to Q
         # [Batch_Size, Num_Heads_Q, Seq_Len, Head_Dim]
-        query_states = mixtures[name].attn_func(
+        query_states = _checkpoint_wrapper(
+            mixtures[name].attn_func,
             "forward_apply_rotary_emb", layer_idx, query_states, rope_cos, rope_sin
         )
         query_states_all[name] = query_states
@@ -241,7 +272,8 @@ def forward_mixture_attn(
 
     # Repeat the key and values to match the number of heads of the query
     for name in key_states_all:
-        key_states, value_states = mixtures[name].attn_func(
+        key_states, value_states = _checkpoint_wrapper(
+            mixtures[name].attn_func,
             "repeat_kv",
             layer_idx,
             key_states_all[name],
@@ -298,7 +330,8 @@ def forward_mixture_attn(
         if name in post_attn_skip_names:
             attn_outputs_final[name] = None
         else:
-            attn_outputs_final[name] = mixtures[name].attn_func(
+            attn_outputs_final[name] = _checkpoint_wrapper(
+                mixtures[name].attn_func,
                 "forward_o_proj", layer_idx, attn_outputs[name]
             )
     return attn_outputs_final
@@ -306,7 +339,7 @@ def forward_mixture_attn(
 
 # should have named this `MoE`
 class JointModel(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_grad_checkpointing: bool):
         super().__init__()
         self.config = config
         self.num_hidden_layers = config.num_hidden_layers
@@ -321,6 +354,8 @@ class JointModel(nn.Module):
             mixture_config = OmegaConf.merge(config, mixture_config)
             self.mixtures[mixture_name] = Mixture(mixture_config)
         self.mixture_names = list(config.mixture.keys())
+
+        self.use_grad_checkpointing = use_grad_checkpointing
 
     def build_mixture_caches(self):
         return {name: KVCache() for name in self.cache_names}
@@ -369,6 +404,7 @@ class JointModel(nn.Module):
                 post_attn_skip_names=final_layer_post_attn_skip_names
                 if is_final_layer
                 else [],
+                use_grad_checkpointing=self.use_grad_checkpointing,
             )
 
         # [Batch_Size, Seq_Len, Hidden_Size]

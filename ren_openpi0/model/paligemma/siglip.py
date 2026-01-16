@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from ren_openpi0.model.lora import get_layer
+from ren_openpi0.model.utils import checkpoint_wrapper
 
 
 class PaliGemmaMultiModalProjector(nn.Module):
@@ -306,6 +307,7 @@ class SiglipVisionModel(nn.Module):
         config,
         use_quantize: bool = False,
         use_lora: bool = False,
+        use_grad_checkpointing: bool = False
     ):
         super().__init__()
         self.config = config
@@ -314,7 +316,11 @@ class SiglipVisionModel(nn.Module):
             use_quantize=use_quantize,
             use_lora=use_lora,
         )
+        self._use_grad_checkpointing = use_grad_checkpointing
 
     def forward(self, pixel_values) -> Tuple:
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim]
-        return self.vision_model(pixel_values=pixel_values)
+        return checkpoint_wrapper(
+            self.vision_model,
+            pixel_values,
+            use_grad_checkpointing=self._use_grad_checkpointing)

@@ -1,4 +1,5 @@
 import torch
+from torch.utils.checkpoint import checkpoint
 
 
 def rotate_half(x):
@@ -29,3 +30,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         slen,
         head_dim,
     )
+
+def checkpoint_wrapper(func, *args, use_grad_checkpointing: bool):
+    if use_grad_checkpointing and torch.is_grad_enabled():
+        return checkpoint(func, *args, use_reentrant=False)
+    else:
+        return func(*args)

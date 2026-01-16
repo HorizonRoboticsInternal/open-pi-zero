@@ -31,9 +31,11 @@ class PiZero(nn.Module, NoSyncBase):
     @log_execution_time(log)
     def __init__(self,
                  cfg,
+                 use_grad_checkpointing: bool = False,
                  use_ddp: bool = False):
         super().__init__()
         self.cfg = cfg
+        self.use_grad_checkpointing = use_grad_checkpointing
         self.use_ddp = use_ddp  # used in NoSyncBase
         self.vocab_size = cfg.vocab_size
         self.pad_token_id = cfg.pad_token_id
@@ -69,11 +71,13 @@ class PiZero(nn.Module, NoSyncBase):
         )  # 0.527B parameters
 
         # Vision
-        self.vision_tower = hydra.utils.instantiate(cfg.vision)
+        self.vision_tower = hydra.utils.instantiate(cfg.vision,
+                                                    use_grad_checkpointing=use_grad_checkpointing)
         self.multi_modal_projector = hydra.utils.instantiate(cfg.vision_projector)
 
         # Mixtures
-        self.joint_model = hydra.utils.instantiate(cfg.joint)
+        self.joint_model = hydra.utils.instantiate(cfg.joint,
+                                                   use_grad_checkpointing=use_grad_checkpointing)
 
         # Action, proprio, time encoders
         self.action_expert_adaptive_mode = cfg.action_expert_adaptive_mode
