@@ -457,6 +457,38 @@ class PiZero(nn.Module, NoSyncBase):
         # Will be hidden_state or (hidden_state, kv_caches) if return_caches is True
         return res
 
+    def get_vlm_proprio_hidden_state_with_vision_cache(self,
+                                     inputs_embeds: torch.FloatTensor,
+                                     image_text_proprio_mask: torch.FloatTensor,
+                                     vlm_position_ids: torch.LongTensor,
+                                     proprio_position_ids: torch.LongTensor,
+                                     proprios: torch.FloatTensor,
+                                     return_caches: bool = False,
+                                     ) -> Union[Dict[str, torch.Tensor],
+    Tuple[Dict[str, torch.Tensor], Dict[str, KVCache]]]:
+        kv_caches = self.joint_model.build_mixture_caches()
+
+        # proprio
+        proprio_embeds = self.proprio_encoder(proprios)
+
+        # forward pass thru the vlm and proprio, cache the kv
+        res = self.joint_model(
+            attention_mask=image_text_proprio_mask,
+            position_ids_all={
+                "vlm": vlm_position_ids,
+                "proprio": proprio_position_ids,
+            },
+            embeds_all={
+                "vlm": inputs_embeds,
+                "proprio": proprio_embeds,
+            },
+            kv_caches=kv_caches,
+            final_layer_post_attn_skip_names=(),
+            return_caches=return_caches,
+        )
+        # Will be hidden_state or (hidden_state, kv_caches) if return_caches is True
+        return res
+
     def get_vlm_proprio_kv_caches(self,
                       input_ids: torch.LongTensor,
                       pixel_values: torch.FloatTensor,
