@@ -23,6 +23,20 @@ from ren_openpi0.model.vla.mixture import Mixture
 from ren_openpi0.model.utils import checkpoint_wrapper
 
 
+def _attention_core(query_states, key_states, value_states, attention_mask,
+                    head_dim, attn_softclamp, attention_dropout, training):
+    """Pure attention math; no KV-cache mutations during checkpoint recomputation."""
+    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(head_dim)
+    attn_weights = attn_weights / attn_softclamp
+    attn_weights = torch.tanh(attn_weights)
+    attn_weights = attn_weights * attn_softclamp
+    attn_weights = attn_weights + attention_mask
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
+        query_states.dtype
+    )
+    attn_weights = nn.functional.dropout(attn_weights, p=attention_dropout, training=training)
+    return torch.matmul(attn_weights, value_states)
+
 
 def forward_mixture_layers(
     mixtures: nn.ModuleDict,
@@ -57,8 +71,8 @@ def forward_mixture_layers(
     hidden_states_pre_attn = hidden_states_input_norm
 
     # [Batch_Size, Seq_Len, Hidden_Size]
-    # Can't checkpoint forward_mixture_attn because it mutates the kv_cache
-    # Instead, we'll checkpoint the individual attn calls within it.
+    # Keep KV-cache mutations outside checkpointing. The projections and pure
+    # attention core inside forward_mixture_attn are checkpointed separately.
     hidden_states_post_attn = forward_mixture_attn(
         mixtures,
         hidden_states_all=hidden_states_pre_attn,
@@ -288,30 +302,18 @@ def forward_mixture_attn(
     key_states = torch.cat(tuple(key_states_all.values()), dim=-2)
     value_states = torch.cat(tuple(value_states_all.values()), dim=2)
 
-    # Perform the calculation as usual, Q * K^T / sqrt(head_dim)
-    # [Batch_Size, Num_Heads_Q, Full_Seq_Len, Full_Seq_Len]
-    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(
-        mixtures[active_mixture_names[0]].head_dim
+    # Do not retain the quadratic softcap/softmax intermediates for every layer.
+    attn_output = _checkpoint_wrapper(
+        _attention_core,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        mixtures[active_mixture_names[0]].head_dim,
+        attn_softclamp,
+        attention_dropout,
+        mixtures[active_mixture_names[0]].training,
     )
-
-    # Soft capping
-    attn_weights = attn_weights / attn_softclamp
-    attn_weights = torch.tanh(attn_weights)
-    attn_weights = attn_weights * attn_softclamp
-
-    # Apply the softmax / dropout
-    attn_weights = attn_weights + attention_mask
-    # [Batch_Size, Num_Heads_Q, Full_Seq_Len, Full_Seq_Len]
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-        query_states.dtype
-    )
-    attn_weights = nn.functional.dropout(
-        attn_weights,
-        p=attention_dropout,
-        training=mixtures[active_mixture_names[0]].training,
-    )
-    # Multiply by the values. [Batch_Size, Num_Heads_Q, Full_Seq_Len, Full_Seq_Len] x [Batch_Size, Num_Heads_KV, Full_Seq_Len, Head_Dim] -> [Batch_Size, Num_Heads_Q, Full_Seq_Len, Head_Dim]
-    attn_output = torch.matmul(attn_weights, value_states)
 
     # Make sure the sequence length is the second dimension. # [Batch_Size, Num_Heads_Q, Full_Seq_Len, Head_Dim] -> [Batch_Size, Full_Seq_Len, Num_Heads_Q, Head_Dim]
     attn_output = attn_output.transpose(1, 2).contiguous()
