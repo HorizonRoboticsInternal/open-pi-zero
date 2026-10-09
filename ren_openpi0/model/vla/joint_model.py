@@ -389,7 +389,8 @@ class JointModel(nn.Module):
                 dtype=embeds_all[name].dtype,
                 device=embeds_all[name].device,
             )
-            embeds_all[name] *= normalizer
+            # Mutating input tensors here corrupts compiled autograd output aliases.
+            embeds_all[name] = embeds_all[name] * normalizer
 
         # layers
         for layer_idx in range(self.num_hidden_layers):
