@@ -25,6 +25,16 @@ from ren_openpi0.utils.monitor import log_execution_time
 log = logging.getLogger(__name__)
 
 
+def action_error_mean(error, action_horizon_is_pad=None, action_dim_is_pad=None):
+    """Molmo-style reduction: zero padded steps, average over valid dimensions."""
+    if action_horizon_is_pad is not None:
+        error = error * (~action_horizon_is_pad).unsqueeze(-1)
+    if action_dim_is_pad is not None:
+        valid = (~action_dim_is_pad).unsqueeze(1)
+        error = (error * valid).sum(-1) / valid.sum(-1).clamp_min(1)
+    return error.mean()
+
+
 
 
 class PiZero(nn.Module, NoSyncBase):
@@ -177,57 +187,29 @@ class PiZero(nn.Module, NoSyncBase):
         safetensors_files = glob.glob(
             os.path.join(self.cfg.pretrained_model_path, "*.safetensors")
         )
+        if not safetensors_files:
+            raise FileNotFoundError(f"No PaliGemma weights in {self.cfg.pretrained_model_path}")
         tensors = {}
         for safetensors_file in safetensors_files:
             with safe_open(safetensors_file, framework="pt", device="cpu") as f:
                 for key in f.keys():
                     tensors[key] = f.get_tensor(key)
 
-        # load embed tokens
-        embed_tokens_state_dict = self.embed_tokens.state_dict()
-        for k, v in tensors.items():
-            if "embed_tokens" in k:
-                new_key = k.replace("language_model.model.embed_tokens.", "")
-                embed_tokens_state_dict[new_key] = v
-        self.embed_tokens.load_state_dict(embed_tokens_state_dict, strict=True)
-        log.info("Loaded pre-trained weights for embed tokens")
-
-        # load vision tower --- "vision_tower.vision_model" -> "vision_model"
-        vision_tower_state_dict = self.vision_tower.state_dict()
-        for k, v in tensors.items():
-            if "vision_tower" in k:
-                new_key = k.replace("vision_tower.", "")
-                vision_tower_state_dict[new_key] = v
-        self.vision_tower.load_state_dict(vision_tower_state_dict, strict=True)
-        log.info("Loaded pre-trained weights for vision tower")
-
-        # load projector --- "multi_modal_projector.linear" -> "linear"
-        multi_modal_projector_state_dict = self.multi_modal_projector.state_dict()
-        for k, v in tensors.items():
-            if "multi_modal_projector" in k:
-                new_key = k.replace("multi_modal_projector.", "")
-                multi_modal_projector_state_dict[new_key] = v
-        self.multi_modal_projector.load_state_dict(
-            multi_modal_projector_state_dict, strict=True
-        )
-        log.info("Loaded pre-trained weights for projector")
-
-        # load lm --- do not change any lora weights
-        joint_model_state_dict = self.joint_model.state_dict()
-        lora_keys = []
-        for key in (
-            joint_model_state_dict.keys()
-        ):  # avoid RuntimeError: OrderedDict mutated during iteration
-            if "lora_" in key:
-                lora_keys.append(key)
-        for key in lora_keys:
-            del joint_model_state_dict[key]
-        for k, v in tensors.items():
-            if "language_model.model" in k:
-                new_key = k.replace("language_model.model.", "mixtures.vlm.")
-                joint_model_state_dict[new_key] = v
-        self.joint_model.load_state_dict(joint_model_state_dict, strict=False)
-        log.info("Loaded pre-trained weights for lm part of the joint model")
+        # Only initialize the VLM. Missing base weights must not silently leave
+        # random parameters frozen underneath the adapters.
+        for module, prefix in (
+            (self.embed_tokens, "language_model.model.embed_tokens."),
+            (self.vision_tower, "vision_tower."),
+            (self.multi_modal_projector, "multi_modal_projector."),
+            (self.joint_model.mixtures["vlm"], "language_model.model."),
+        ):
+            weights = {
+                key: tensors[prefix + key]
+                for key in module.state_dict()
+                if "lora_" not in key
+            }
+            module.load_state_dict(weights, strict=False)  # LoRA stays newly initialized.
+        log.info("Loaded PaliGemma vision, projector, language model, and token embeddings")
 
     def _check_gemma_unused_parameter_by_name(self, name: str) -> bool:
         """no need to train vlm parameters after attention of last layer"""
@@ -394,12 +376,15 @@ class PiZero(nn.Module, NoSyncBase):
 
         # image features from siglip and projector
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim] -> [Batch_Size, Num_Patches, Hidden_Size]
+        if pixel_values.ndim == 5:
+            pixel_values = pixel_values.flatten(0, 1)
         selected_image_feature = self.vision_tower(pixel_values)
         image_features = self.multi_modal_projector(selected_image_feature)
 
         # normalize the image features
         _, _, embed_dim = image_features.shape
         bsz, seq_len = input_ids.shape
+        image_features = image_features.reshape(bsz, -1, embed_dim)
         scaled_image_features = image_features / (self.image_text_hidden_size**0.5)
 
         # put embedding together - image, text, padding
@@ -674,12 +659,19 @@ class PiZero(nn.Module, NoSyncBase):
         proprios: torch.FloatTensor,
         actions: torch.FloatTensor,
         t: torch.FloatTensor,
-    ) -> torch.FloatTensor:
+        action_horizon_is_pad: Optional[torch.BoolTensor] = None,
+        action_dim_is_pad: Optional[torch.BoolTensor] = None,
+        return_action_pred: bool = False,
+    ):
         """flow matching loss for action prediction, no use of kv cache"""
         # noisy action
         # [Batch_Size, Horizon_Steps, Action_Dim]
         x0 = torch.randn_like(actions, device=t.device, dtype=t.dtype)
         x1 = actions
+        if action_dim_is_pad is not None:
+            valid = (~action_dim_is_pad).unsqueeze(1)
+            x0 = x0 * valid
+            x1 = x1 * valid
         psi_t = self.psi_t(x0, x1, t)
 
         # text tokens + image tokens
@@ -717,7 +709,14 @@ class PiZero(nn.Module, NoSyncBase):
 
         # compare to true velocity
         d_psi = x1 - (1 - self.flow_sig_min) * x0
-        return torch.mean((v_psi - d_psi) ** 2)
+        loss = action_error_mean((v_psi - d_psi) ** 2,
+                                 action_horizon_is_pad, action_dim_is_pad)
+        if return_action_pred:
+            # Endpoint estimate from this training pass, not a sampled rollout.
+            with torch.no_grad():
+                pred_actions = psi_t + (1 - t[:, None, None]) * v_psi
+            return loss, pred_actions
+        return loss
 
 
 class PiZeroInference(PiZero):

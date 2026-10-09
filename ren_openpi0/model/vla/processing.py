@@ -39,8 +39,8 @@ def normalize(
     assert (
         image.shape[1] == 3
     ), f"Expected 3 channels at axis 1, got {image.shape[1]} channels."
-    mean = mean[None, :, None, None]  # add batch and spatial dimensions
-    std = std[None, :, None, None]
+    mean = mean.to(device=image.device)[None, :, None, None]
+    std = std.to(device=image.device)[None, :, None, None]
     image = (image - mean) / std
     return image
 
@@ -69,10 +69,12 @@ class VLAProcessor:
         num_image_tokens: int,
         max_seq_len: int,
         tokenizer_padding: str = "max_length",  #  # instead of truncating to longest
+        num_images: int = 1,
     ):
         super().__init__()
 
-        self.image_seq_length = num_image_tokens
+        self.image_seq_length = num_image_tokens * num_images
+        self.num_images = num_images
         self.max_seq_len = max_seq_len
         self.tokenizer_padding = tokenizer_padding
 
@@ -106,12 +108,20 @@ class VLAProcessor:
             images.dtype == torch.uint8
         ), f"Expected uint8 tensor for images, got {images.dtype}."
 
+        # Keep cameras together per example, with the same order as their tokens.
+        multi_image = images.ndim == 5
+        if multi_image:
+            assert images.shape[1] == self.num_images
+        else:
+            assert self.num_images == 1
         pixel_values = process_images(
-            images,
+            images.flatten(0, 1) if multi_image else images,
             rescale_factor=1 / 255.0,
             image_mean=IMAGENET_STANDARD_MEAN,
             image_std=IMAGENET_STANDARD_STD,
         )
+        if multi_image:
+            pixel_values = pixel_values.reshape(images.shape)
 
         # Prepend a `self.image_seq_length` number of image tokens to the prompt
         input_strings = [
