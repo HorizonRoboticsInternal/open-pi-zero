@@ -12,7 +12,7 @@ from ren_openpi0.agent.env_adapter.base import BaseEnvAdapter
 from ren_openpi0.model.vla.processing import VLAProcessor
 from ren_openpi0.utils.geometry import euler2axangle, mat2euler, quat2mat
 
-from hobot.robot_common.widowx250s_kinematics import WidowX250sKinematicsSolver
+from src.robots.widowx250s_kinematics import WidowX250sKinematicsSolver
 from scipy.spatial.transform import Rotation as R
 
 
